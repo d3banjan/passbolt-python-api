@@ -42,60 +42,79 @@ Note: Do not keep private and public files. Rather just import them using gpg co
 #### Using Python
 To import new keys using Python:
 
-    >>>import passboltapi
-    >>>passbolt = passboltapi.PassboltAPI(config_path="config.ini", new_keys=True)
+```python
+>>> import passboltapi
+>>> passbolt = passboltapi.PassboltAPI(config_path="config.ini", new_keys=True)
+```
     
 To delete old keys and import only the new ones.
 
-    >>>import passboltapi
-    >>>passbolt = passboltapi.PassboltAPI(config_path="config.ini", new_keys=True, delete_old_keys=True)
+```python
+>>> import passboltapi
+>>> passbolt = passboltapi.PassboltAPI(config_path="config.ini", new_keys=True, delete_old_keys=True)
+```
 
 #### Using GPG
 
 Import new keys:
 
-    $gpg --import public.asc
-    $gpg --batch --import private.asc
+```bash
+$ gpg --import public.asc
+$ gpg --batch --import private.asc
+```
 
 Deleting existing keys:
 
-    $gpg --delete-secret-keys <fingerprint>
-    $gpg --delete-key <fingerprint>
+```bash
+$gpg --delete-secret-keys <fingerprint>
+$gpg --delete-key <fingerprint>
+```
 
 
 ## How to use PassboltAPI client
 
-    >>>import passboltapi
-    >>>passbolt = passboltapi.PassboltAPI(config_path="config.ini")
-    # Or pass the configuration settings as a dict
-    >>>passbolt = passboltapi.PassboltAPI(config=<dictionary as the given example config.ini>)
-    
-    # Now you may do any get, post, put and delete request.
-    >>>r = passbolt.get(url="/resources.json?api-version=v2")
-    >>>r = passbolt.post(self.server_url + url, json=data)
-    
-    # One can also use it as context manager
-    >>>with passboltapi.PassboltAPI(config_path="config.ini") as passbolt:
+```python
+>>> import passboltapi
+>>> passbolt = passboltapi.PassboltAPI(config_path="config.ini")
+# Or pass the configuration settings as a dict
+>>> passbolt = passboltapi.PassboltAPI(config=<dictionary as the given example config.ini>)
 
 
-To get all resources
+# Import all users/recipients from passbolt server to your local gpg
+>>> passbolt.import_public_keys(trustlevel="TRUST_FULLY")
 
-    resources = {record.username: record for record in passbolt.list_resources(folder_id=folder_id)}
+# Now you may do any get, post, put and delete request.
+>>>r = passbolt.get(url="/resources.json?api-version=v2")
+>>>r = passbolt.post(self.server_url + url, json=data)
+
+# One can also use it as context manager
+>>>with passboltapi.PassboltAPI(config_path="config.ini") as passbolt:
+```
+
+To get all resources, use the list_resources generator as list comprehension or as an argument to `list()` method --
+
+```python
+resources = {record.username: record for record in passbolt.list_resources(folder_id=folder_id)}
+```
 
 To create new resource (optional: folder)
-    
-    response = passbolt.create_resource(
-        name=name,
-        username=username,
-        password=password,
-        uri=uri, # optional
-        description=description,  # optional
-        folder=passbolt_folder_id  # optional
-    )
+   
+```python 
+response = passbolt.create_resource(
+	name=name,
+	username=username,
+	password=password,
+	uri=uri, # optional
+	description=description,  # optional
+	folder=passbolt_folder_id  # optional
+)
+```
 
 To move resource to folder
 
-    passbolt.move_resource_to_folder(resource_id, folder_id)
+```python
+passbolt.move_resource_to_folder(resource_id, folder_id)
+```
 
 
 ### Sample test

@@ -23,6 +23,7 @@ PassboltOpenPgpKeyIdType: TypeAlias = str
 PassboltGroupIdType: TypeAlias = str
 PassboltSecretIdType: TypeAlias = str
 PassboltPermissionIdType: TypeAlias = str
+PassboltTagIdType: TypeAlias = str
 
 # refers to the response from passbolt which is a string representation of datetime
 PassboltDateTimeType: TypeAlias = str
@@ -125,6 +126,20 @@ class PassboltFolderTuple(NamedTuple):
     permissions: List[PassboltPermissionTuple] = []
 
 
+class PassboltTagTuple(NamedTuple):
+    """Represents a tag in Passbolt."""
+    id: PassboltTagIdType
+    slug: str
+    is_shared: bool
+    created: PassboltDateTimeType
+    modified: PassboltDateTimeType
+    created_by: PassboltUserIdType
+    modified_by: PassboltUserIdType
+    tag: str
+    virtual: Optional[dict] = None
+    children: List[dict] = []
+
+
 class PassboltGroupTuple(NamedTuple):
     id: PassboltGroupIdType
     created: PassboltDateTimeType
@@ -144,6 +159,7 @@ AllPassboltTupleTypes = Union[
     PassboltGroupTuple,
     PassboltUserTuple,
     PassboltOpenPgpKeyTuple,
+    PassboltTagTuple,
 ]
 
 

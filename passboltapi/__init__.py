@@ -2,11 +2,15 @@ import configparser
 import json
 import logging
 import urllib.parse
-from typing import List, Mapping, Optional, Tuple, Union, Dict, Any
+from typing import List, Mapping, Optional, Tuple, Union, Dict, Any, TypeVar
 
+import os
 import gnupg
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
+from .cache import Cache, default_cache
 from passboltapi.schema import (
     AllPassboltTupleTypes,
     PassboltDateTimeType,
@@ -33,6 +37,20 @@ from passboltapi.schema import (
     PassboltUserTuple,
     constructor,
 )
+
+# Type variable for generic method returns
+T = TypeVar('T')
+
+# Cache timeouts in seconds
+CACHE_TTL = {
+    'user': 300,        # 5 minutes
+    'resource': 60,     # 1 minute
+    'folder': 300,      # 5 minutes
+    'group': 600,       # 10 minutes
+    'tag': 60,          # 1 minute
+    'permission': 300,  # 5 minutes
+    'gpg': 3600,        # 1 hour
+}
 
 LOGIN_URL = "/auth/login.json"
 VERIFY_URL = "/auth/verify.json"
@@ -231,6 +249,107 @@ class PassboltAPI(APIClient):
 
     Design Principle: All passbolt aware public methods must accept or output one of PassboltTupleTypes"""
 
+    def __init__(
+        self,
+        # --- High-level explicit parameters (preferred modern interface) ---
+        server_url: Optional[str] = None,
+        private_key_path: Optional[str] = None,
+        passphrase: Optional[str] = None,
+        verify: Union[bool, str] = True,
+        timeout: int = 30,
+        enable_caching: bool = True,
+        cache_ttl: Optional[Dict[str, int]] = None,
+        # --- Back-compat parameters accepted by the base APIClient ---
+        config: Optional[str] = None,
+        config_path: Optional[str] = None,
+        new_keys: bool = False,
+        delete_old_keys: bool = False,
+        ssl_verify: bool = True,
+        cert_auth: bool = False,
+    ) -> None:
+        """
+        Initialize the Passbolt API client.
+
+        Args:
+            server_url: Base URL of the Passbolt server (e.g., 'https://passbolt.example.com')
+            private_key_path: Path to the private key file
+            passphrase: Passphrase for the private key
+            verify: Either a boolean, in which case it controls whether we verify
+                   the server's TLS certificate, or a string, in which case it must be a path
+                   to a CA bundle to use. Defaults to True.
+            timeout: Timeout in seconds for API requests. Defaults to 30.
+            enable_caching: Whether to enable caching of API responses. Defaults to True.
+            cache_ttl: Custom TTL values for different cache types. Defaults to None.
+        """
+        # ------------------------------------------------------------
+        # 1. Initialise the low-level APIClient if a config(_path) is
+        #    supplied (legacy / fixtures rely on this). This sets up
+        #    self.requests_session, self.server_url, GPG, etc.
+        # ------------------------------------------------------------
+        if config_path is not None or config is not None:
+            super().__init__(
+                config=config,
+                config_path=config_path,
+                new_keys=new_keys,
+                delete_old_keys=delete_old_keys,
+                ssl_verify=ssl_verify,
+                cert_auth=cert_auth,
+            )
+            # Expose the same Session object under the attribute expected
+            # by the newer helper code.
+            self.session = self.requests_session
+            # Derive passphrase / private key path from config if absent.
+            if passphrase is None:
+                passphrase = self.config["PASSBOLT"].get("PASSPHRASE", "")
+            if private_key_path is None:
+                private_key_path = self.config["PASSBOLT"].get("USER_PRIVATE_KEY_FILE", "")
+            if server_url is None:
+                server_url = self.server_url
+        else:
+            # New-style initialisation without config file.
+            # Ensure server_url doesn't end with a slash
+            if server_url is None:
+                raise ValueError("server_url must be provided when not using config_path/config")
+            self.server_url = server_url.rstrip('/')
+            self.session = requests.Session()
+            retry_strategy = Retry(
+                total=3,
+                backoff_factor=1,
+                status_forcelist=[500, 502, 503, 504],
+                allowed_methods=["HEAD", "GET", "PUT", "DELETE", "OPTIONS", "TRACE", "POST"]
+            )
+            adapter = HTTPAdapter(max_retries=retry_strategy)
+            self.session.mount("http://", adapter)
+            self.session.mount("https://", adapter)
+            # Set up SSL verification
+            self.session.verify = verify
+
+        # Common attributes
+        self.private_key_path = os.path.expanduser(private_key_path) if private_key_path else None
+        self.passphrase = passphrase or ""
+        self.timeout = timeout
+        self._current_user: Optional[PassboltUserTuple] = None
+        self._current_user_id: Optional[PassboltUserIdType] = None
+        self._enable_caching = enable_caching
+        
+        # Set up cache with custom TTLs if provided
+        if enable_caching:
+            self._cache = Cache()
+            # Update cache TTLs if custom values provided
+            if cache_ttl:
+                for key, ttl in cache_ttl.items():
+                    if key in CACHE_TTL:
+                        CACHE_TTL[key] = ttl
+        else:
+            self._cache = None
+
+        # Cache has been set up earlier (self._cache).
+        # Set up logging
+        self.logger = logging.getLogger(__name__)
+
+        # Get the current user
+        self.get_current_user()
+
     def _json_load_secret(self, secret: PassboltSecretTuple) -> Tuple[str, Optional[str]]:
         try:
             secret_dict = json.loads(self.decrypt(secret.data))
@@ -299,13 +418,15 @@ class PassboltAPI(APIClient):
         Args:
             folder_id: (Optional) Filter resources by folder ID (backward compatibility)
             **filters: Additional filters to apply. Common filters include:
-                - has_tag: Filter resources by tag name
-                - has_id: Filter by resource ID(s)
-                - search: Search in name, username, uri, and description
-                - is_shared_with_group: Filter resources shared with a group
-                - is_owned_by_me: Filter resources owned by the current user
-                - is_shared_with_me: Filter resources shared with the current user
-                - has_access: Filter resources accessible by a specific user
+                - has_tag: Filter resources by tag name (string or list of strings). 
+                          For multiple tags, resources matching ANY of the tags will be returned.
+                          Example: has_tag="api" or has_tag=["api", "backend"]
+                - has_id: Filter by resource ID(s). Can be a single ID or list of IDs.
+                - search: Search in name, username, uri, and description.
+                - is_shared_with_group: Filter resources shared with a specific group.
+                - is_owned_by_me: Filter resources owned by the current user (boolean).
+                - is_shared_with_me: Filter resources shared with the current user (boolean).
+                - has_access: Filter resources accessible by a specific user ID.
                 
                 Example:
                     list_resources(has_tag="api", search="production")
@@ -315,6 +436,18 @@ class PassboltAPI(APIClient):
         Returns:
             List[PassboltResourceTuple]: List of resources matching the filters
         """
+        # Create a cache key based on the method name and arguments
+        cache_key = None
+        if self._enable_caching:
+            # Create a stable string representation of the filters for the cache key
+            filter_str = ",".join(f"{k}={v}" for k, v in sorted(filters.items()))
+            cache_key = f"list_resources:folder_id={folder_id}:{filter_str}"
+            
+            # Try to get from cache first
+            cached_result = self._cache.get(cache_key)
+            if cached_result is not None:
+                return cached_result
+        
         # Initialize params with default values
         params = {}
         
@@ -324,12 +457,21 @@ class PassboltAPI(APIClient):
         
         # Process additional filters
         for key, value in filters.items():
+            if value is None:
+                continue
+                
             # Convert snake_case to kebab-case for API compatibility
             filter_key = key.replace('_', '-')
             
             # Handle special cases
             if filter_key == 'has-tag':
-                params["filter[has-tag]"] = value
+                # For tags, we use filter[has-tag]=value format for single tag
+                # and multiple filter[has-tag]=value1&filter[has-tag]=value2 for multiple tags
+                if isinstance(value, (list, tuple, set)):
+                    for tag in value:
+                        params["filter[has-tag]"] = tag
+                else:
+                    params["filter[has-tag]"] = value
             elif filter_key == 'search':
                 params["filter[search]"] = value
             elif filter_key == 'is-shared-with-group':
@@ -506,6 +648,15 @@ class PassboltAPI(APIClient):
         )
         # Return the updated resource to ensure we have the latest state
         return self.read_resource(resource_id=resource_id)
+
+    def get_current_user(self) -> PassboltUserTuple:
+        """Return the current authenticated Passbolt user (cached)."""
+        if self._current_user is not None:
+            return self._current_user
+        # Fallback to ID helper which will populate _current_user
+        _ = self._get_current_user_id()
+        assert self._current_user is not None, "_get_current_user_id did not populate _current_user"
+        return self._current_user
 
     def _get_current_user_id(self) -> str:
         """
@@ -875,12 +1026,10 @@ class PassboltAPI(APIClient):
             # Add a shared tag (prefix with #)
             add_tag_to_resource("#shared-tag", "resource-id")
         """
-        # Community Edition does not expose /resources/<id>/tags.json.
-        # Instead we must PATCH/PUT the resource with a tags array.
-        # Passbolt CE/EE accepts a partial update where the top-level payload
-        # directly includes a `tags` array of plain strings. Using the nested
-        # `Resource` key causes the update to be ignored.
-        payload = {"tags": [tag_name]}
+        # Passbolt does not provide a dedicated tag endpoint; tagging is done by
+        # updating the resource with a `tags` array. Each tag must be an object
+        # with a `tag` key (string). A tag prefixed with '#' becomes shared.
+        payload = {"tags": [{"tag": tag_name}] }
         return self.put(
             f"/resources/{resource_id}.json",
             payload,

@@ -137,10 +137,10 @@ class TestPassboltAPI:
         # Verify the permission was set
         resource = api.read_resource(test_resource.id)
         assert any(
-            perm.aro == "User" 
-            and perm.aro_foreign_key == user.id 
+            perm.aro == "User"
+            and perm.aro_foreign_key == user.id
             and perm.type == 1
-            for perm in (resource.permission if isinstance(resource.permission, list) else [resource.permission])
+            for perm in resource.permissions
         )
 
     def test_filter_resources_by_tag(self, api, test_resource, caplog):
@@ -279,6 +279,186 @@ class TestPassboltAPI:
         assert user_details is not None, f"Test user {test_user.id} not found in user list"
         assert user_details.id == test_user.id
         assert user_details.username == test_user.username
+
+    def test_list_resources_with_has_parent_filter(self, api, test_folder, test_resource):
+        """Test listing resources with has_parent filter."""
+        # List resources in the test folder using has_parent filter
+        resources = api.list_resources(has_parent=test_folder.id)
+        assert isinstance(resources, list)
+
+        # Verify the test resource is in the list
+        resource_ids = [r.id for r in resources]
+        assert test_resource.id in resource_ids
+
+        # Verify all resources have the correct parent folder
+        for resource in resources:
+            assert resource.folder_parent_id == test_folder.id
+
+    def test_list_resources_includes_tags_and_permissions(self, api, test_resource):
+        """Test that list_resources includes tags and permissions by default."""
+        resources = api.list_resources(has_id=test_resource.id)
+        assert len(resources) > 0
+
+        resource = resources[0]
+        # Verify tags field exists (may be empty list)
+        assert hasattr(resource, 'tags')
+        assert isinstance(resource.tags, list)
+
+        # Verify permissions field exists (may be empty list)
+        assert hasattr(resource, 'permissions')
+        assert isinstance(resource.permissions, list)
+
+    def test_read_resource_includes_tags(self, api, test_resource):
+        """Test that read_resource includes tags by default."""
+        resource = api.read_resource(test_resource.id)
+
+        # Verify tags field exists
+        assert hasattr(resource, 'tags')
+        assert isinstance(resource.tags, list)
+
+        # Verify permissions field exists
+        assert hasattr(resource, 'permissions')
+        assert isinstance(resource.permissions, list)
+
+    def test_apply_sharing_rules_with_has_parent(self, api, test_folder, test_resource, test_users):
+        """Test applying sharing rules to resources in a folder."""
+        if not test_users:
+            pytest.skip("No test users available")
+
+        user = test_users[0]
+        permissions = [
+            {
+                "aro": "User",
+                "aro_foreign_key": user.id,
+                "type": 1,  # Read permission
+            }
+        ]
+
+        # Apply sharing rules to all resources in the folder
+        result = api.apply_sharing_rules(
+            has_parent=test_folder.id,
+            permissions=permissions,
+            replace=False
+        )
+
+        # Verify result structure
+        assert "success" in result
+        assert "failed" in result
+        assert "total" in result
+        assert "succeeded" in result
+        assert "failed_count" in result
+
+        # Verify at least one resource was processed
+        assert result["total"] > 0
+
+        # Verify test resource was successfully shared
+        success_ids = [s["resource_id"] for s in result["success"]]
+        assert test_resource.id in success_ids
+
+        # Verify no failures
+        assert result["failed_count"] == 0
+        assert len(result["failed"]) == 0
+
+    def test_apply_sharing_rules_with_has_tag(self, api, test_resource, test_users):
+        """Test applying sharing rules to resources with a specific tag."""
+        if not test_users:
+            pytest.skip("No test users available")
+
+        # Add a tag to the test resource
+        tag_name = "test-sharing-tag"
+        api.add_tag_to_resource(tag_name, test_resource.id)
+
+        # Clear cache to ensure fresh data
+        if api._enable_caching and api._cache:
+            api._cache.clear()
+
+        # Verify the tag was added by checking the resource
+        resource_with_tag = api.read_resource(test_resource.id)
+        tag_names = [t.tag for t in resource_with_tag.tags]
+        if tag_name not in tag_names:
+            pytest.skip(f"Tag '{tag_name}' was not added to resource (tags: {tag_names})")
+
+        user = test_users[0]
+        permissions = [
+            {
+                "aro": "User",
+                "aro_foreign_key": user.id,
+                "type": 1,  # Read permission
+            }
+        ]
+
+        # Apply sharing rules to resources with the tag
+        result = api.apply_sharing_rules(
+            has_tag=tag_name,
+            permissions=permissions,
+            replace=False
+        )
+
+        # Verify result structure
+        assert "success" in result
+        assert "failed" in result
+        assert result["total"] > 0, f"Expected resources with tag '{tag_name}', but found {result['total']}"
+
+        # Verify test resource was in the results
+        all_resource_ids = [s["resource_id"] for s in result["success"]] + \
+                          [f["resource_id"] for f in result["failed"]]
+        assert test_resource.id in all_resource_ids
+
+    def test_apply_sharing_rules_with_multiple_resources(self, api, test_folder, test_users):
+        """Test applying sharing rules to multiple resources at once."""
+        if not test_users:
+            pytest.skip("No test users available")
+
+        # Create multiple test resources
+        from passboltapi.schema import PassboltResourceTuple, constructor
+        from tests.conftest import get_random_string
+
+        resource_ids = []
+        for i in range(3):
+            resource_dict = api.create_resource(
+                name=f"Bulk Share Test {i} {get_random_string()}",
+                username=f"bulk_user_{i}",
+                password=get_random_string(12),
+                folder_id=test_folder.id
+            )
+            if not isinstance(resource_dict, PassboltResourceTuple):
+                resource = constructor(PassboltResourceTuple)(resource_dict)
+            else:
+                resource = resource_dict
+            resource_ids.append(resource.id)
+
+        try:
+            # Apply sharing rules
+            user = test_users[0]
+            permissions = [
+                {
+                    "aro": "User",
+                    "aro_foreign_key": user.id,
+                    "type": 1,  # Read permission
+                }
+            ]
+
+            result = api.apply_sharing_rules(
+                has_parent=test_folder.id,
+                permissions=permissions,
+                replace=False
+            )
+
+            # Verify all resources were processed
+            assert result["total"] >= 3
+
+            # Verify our test resources are in the success list
+            success_ids = [s["resource_id"] for s in result["success"]]
+            for resource_id in resource_ids:
+                assert resource_id in success_ids
+
+        finally:
+            # Clean up test resources
+            for resource_id in resource_ids:
+                try:
+                    api.delete(f"/resources/{resource_id}.json")
+                except Exception as e:
+                    logging.warning(f"Failed to clean up resource {resource_id}: {e}")
 
 
 if __name__ == "__main__":

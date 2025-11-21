@@ -408,17 +408,18 @@ class PassboltAPI(APIClient):
         yield from resources
 
     def list_resources(
-        self, 
+        self,
         folder_id: Optional[PassboltFolderIdType] = None,
         **filters
     ) -> List[PassboltResourceTuple]:
         """
         List resources with optional filtering.
-        
+
         Args:
             folder_id: (Optional) Filter resources by folder ID (backward compatibility)
             **filters: Additional filters to apply. Common filters include:
-                - has_tag: Filter resources by tag name (string or list of strings). 
+                - has_parent: Filter resources by parent folder UUID (string).
+                - has_tag: Filter resources by tag name (string or list of strings).
                           For multiple tags, resources matching ANY of the tags will be returned.
                           Example: has_tag="api" or has_tag=["api", "backend"]
                 - has_id: Filter by resource ID(s). Can be a single ID or list of IDs.
@@ -427,14 +428,15 @@ class PassboltAPI(APIClient):
                 - is_owned_by_me: Filter resources owned by the current user (boolean).
                 - is_shared_with_me: Filter resources shared with the current user (boolean).
                 - has_access: Filter resources accessible by a specific user ID.
-                
+
                 Example:
+                    list_resources(has_parent="d72d75fd-b79b-4fa5-a87e-e15a481524f7")
                     list_resources(has_tag="api", search="production")
                     list_resources(is_shared_with_me=True)
                     list_resources(has_id=["id1", "id2"])
-        
+
         Returns:
-            List[PassboltResourceTuple]: List of resources matching the filters
+            List[PassboltResourceTuple]: List of resources with tags and permissions included
         """
         # Create a cache key based on the method name and arguments
         cache_key = None
@@ -459,10 +461,10 @@ class PassboltAPI(APIClient):
         for key, value in filters.items():
             if value is None:
                 continue
-                
+
             # Convert snake_case to kebab-case for API compatibility
             filter_key = key.replace('_', '-')
-            
+
             # Handle special cases
             if filter_key == 'has-tag':
                 # For tags, we use filter[has-tag]=value format for single tag
@@ -472,6 +474,8 @@ class PassboltAPI(APIClient):
                         params["filter[has-tag]"] = tag
                 else:
                     params["filter[has-tag]"] = value
+            elif filter_key == 'has-parent':
+                params["filter[has-parent]"] = value
             elif filter_key == 'search':
                 params["filter[search]"] = value
             elif filter_key == 'is-shared-with-group':
@@ -493,10 +497,18 @@ class PassboltAPI(APIClient):
             else:
                 # For any other filter, pass it through as-is
                 params[f"filter[{filter_key}]"] = value
-        
+
         # Always include favorite information
         params["contain[favorite]"] = 1
-        
+
+        # Include tags and permissions when filtering (more targeted queries)
+        # This avoids server errors on some Passbolt versions when listing all resources
+        # Note: Some servers don't support contain parameters with search, so exclude them
+        has_search_filter = filters.get('search') is not None
+        if (folder_id is not None or len(filters) > 0) and not has_search_filter:
+            params["contain[tags]"] = 1
+            params["contain[permissions]"] = 1
+
         # Get resources
         response = self.get("/resources.json", params=params)
         assert "body" in response.keys(), f"Key 'body' not found in response keys: {response.keys()}"
@@ -506,10 +518,31 @@ class PassboltAPI(APIClient):
             response = self.get("/folders.json", params={"filter[has-id][]": folder_id, "contain[children_resources]": 1})
             if response["body"] and len(response["body"]) > 0 and "children_resources" in response["body"][0]:
                 resources = response["body"][0]["children_resources"]
-                return constructor(PassboltResourceTuple)(resources)
+                result = constructor(
+                    PassboltResourceTuple,
+                    subconstructors={
+                        "permissions": constructor(PassboltPermissionTuple),
+                        "tags": constructor(PassboltTagTuple),
+                    },
+                )(resources)
+                if self._enable_caching and cache_key:
+                    self._cache.set(cache_key, result, ttl=CACHE_TTL.get("resource", 60))
+                return result
             return []
-        
-        return constructor(PassboltResourceTuple)(response["body"])
+
+        result = constructor(
+            PassboltResourceTuple,
+            subconstructors={
+                "permissions": constructor(PassboltPermissionTuple),
+                "tags": constructor(PassboltTagTuple),
+            },
+        )(response["body"])
+
+        # Cache the result
+        if self._enable_caching and cache_key:
+            self._cache.set(cache_key, result, ttl=CACHE_TTL.get("resource", 60))
+
+        return result
 
     def list_users_with_folder_access(self, folder_id: PassboltFolderIdType) -> List[PassboltUserTuple]:
         folder_tuple = self.describe_folder(folder_id)
@@ -554,22 +587,39 @@ class PassboltAPI(APIClient):
             self.gpg.trust_keys(user.gpgkey.fingerprint, trustlevel)
 
     def read_resource(self, resource_id: PassboltResourceIdType) -> PassboltResourceTuple:
-        # Ask for permissions with the plural key because newer Passbolt
-        # versions (CE 4.0+) expose them under `permissions`.
-        params = {"contain[permissions]": 1}
+        """
+        Read a single resource with its permissions and tags.
+
+        Args:
+            resource_id: The UUID of the resource to read
+
+        Returns:
+            PassboltResourceTuple: The resource with permissions and tags included
+        """
+        # Ask for permissions and tags
+        params = {
+            "contain[permissions]": 1,
+            "contain[tags]": 1,
+        }
         response_obj = self.get(
             f"/resources/{resource_id}.json",
             params=params,
             return_response_object=True,
         )
         response = response_obj.json()["body"]
-        # Normalise key name so downstream code/tests can always rely on
-        # `permission` (singular) regardless of server version.
-        if "permission" not in response and "permissions" in response:
-            response["permission"] = response.pop("permissions")
-        return constructor(PassboltResourceTuple, subconstructors={
-            "permission": constructor(PassboltPermissionTuple)
-        })(response)
+        # Normalize key name - ensure we use `permissions` (plural)
+        if "permission" in response and "permissions" not in response:
+            response["permissions"] = response.pop("permission")
+        # If permissions is a single object, wrap it in a list
+        if "permissions" in response and not isinstance(response["permissions"], list):
+            response["permissions"] = [response["permissions"]]
+        return constructor(
+            PassboltResourceTuple,
+            subconstructors={
+                "permissions": constructor(PassboltPermissionTuple),
+                "tags": constructor(PassboltTagTuple),
+            },
+        )(response)
 
     def read_resource_type(self, resource_type_id: PassboltResourceTypeIdType) -> PassboltResourceTypeTuple:
         response = self.get(f"/resource-types/{resource_type_id}.json", return_response_object=True)
@@ -880,6 +930,113 @@ class PassboltAPI(APIClient):
         )
         
         return True
+
+    def apply_sharing_rules(
+        self,
+        permissions: List[dict],
+        replace: bool = False,
+        **filters
+    ) -> dict:
+        """
+        Apply sharing permissions to multiple resources based on filter criteria.
+
+        This method allows bulk sharing operations by applying permissions to all resources
+        that match the specified filters. Errors are collected rather than stopping execution,
+        allowing you to see which resources succeeded and which failed.
+
+        Args:
+            permissions: List of permission dictionaries with keys:
+                - aro: 'User' or 'Group'
+                - aro_foreign_key: ID of the user or group
+                - type: Permission type (1 = Read, 7 = Update, 15 = Owner)
+            replace: If True, replaces all existing permissions. If False, adds to existing permissions.
+            **filters: Filter criteria to select resources. Common filters include:
+                - folder_id: Filter by folder ID
+                - has_parent: Filter by parent folder UUID
+                - has_tag: Filter by tag name (string or list)
+                - has_id: Filter by resource ID(s)
+                - search: Search in name, username, uri, description
+                - is_shared_with_group: Filter resources shared with a group
+                - is_owned_by_me: Filter resources owned by current user
+                - is_shared_with_me: Filter resources shared with current user
+
+        Returns:
+            dict: Summary with 'success' and 'failed' lists:
+                {
+                    "success": [
+                        {"resource_id": "...", "name": "..."},
+                        ...
+                    ],
+                    "failed": [
+                        {"resource_id": "...", "name": "...", "error": "..."},
+                        ...
+                    ],
+                    "total": <number of resources processed>,
+                    "succeeded": <number of successful shares>,
+                    "failed_count": <number of failed shares>
+                }
+
+        Example:
+            # Share all resources in a folder with a group
+            result = api.apply_sharing_rules(
+                has_parent="d72d75fd-b79b-4fa5-a87e-e15a481524f7",
+                permissions=[{
+                    "aro": "Group",
+                    "aro_foreign_key": "group-uuid",
+                    "type": 1  # Read permission
+                }]
+            )
+
+            # Share all resources with a specific tag
+            result = api.apply_sharing_rules(
+                has_tag="production",
+                permissions=[{
+                    "aro": "User",
+                    "aro_foreign_key": "user-uuid",
+                    "type": 7  # Update permission
+                }],
+                replace=False
+            )
+        """
+        # Clear cache to ensure we get fresh resource list
+        if self._enable_caching and self._cache:
+            self._cache.clear()
+
+        # Get all resources matching the filters
+        resources = self.list_resources(**filters)
+
+        # Initialize result tracking
+        result = {
+            "success": [],
+            "failed": [],
+            "total": len(resources),
+            "succeeded": 0,
+            "failed_count": 0,
+        }
+
+        # Apply sharing to each resource
+        for resource in resources:
+            try:
+                self.share_resource(
+                    resource_id=resource.id,
+                    permissions=permissions,
+                    replace=replace,
+                )
+                result["success"].append({
+                    "resource_id": resource.id,
+                    "name": resource.name,
+                })
+                result["succeeded"] += 1
+            except Exception as e:
+                result["failed"].append({
+                    "resource_id": resource.id,
+                    "name": resource.name,
+                    "error": str(e),
+                })
+                result["failed_count"] += 1
+                logging.error(f"Failed to share resource {resource.id} ({resource.name}): {e}")
+
+        return result
 
     def create_resource(
         self,

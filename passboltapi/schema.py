@@ -85,6 +85,20 @@ class PassboltUserTuple(NamedTuple):
     gpgkey: Optional[PassboltOpenPgpKeyTuple] = None
 
 
+class PassboltTagTuple(NamedTuple):
+    """Represents a tag in Passbolt."""
+    id: PassboltTagIdType
+    slug: str
+    is_shared: bool
+    created: PassboltDateTimeType
+    modified: PassboltDateTimeType
+    created_by: PassboltUserIdType
+    modified_by: PassboltUserIdType
+    tag: str
+    virtual: Optional[dict] = None
+    children: List[dict] = []
+
+
 class PassboltResourceTuple(NamedTuple):
     id: PassboltResourceIdType
     created: PassboltDateTimeType
@@ -101,7 +115,8 @@ class PassboltResourceTuple(NamedTuple):
     creator: Union[None, PassboltUserTuple] = None
     favorite: Union[None, PassboltFavoriteDetailsType] = None
     modifier: Union[None, PassboltUserTuple] = None
-    permission: Union[PassboltPermissionTuple] = None
+    permissions: List[PassboltPermissionTuple] = []
+    tags: List[PassboltTagTuple] = []
 
 
 class PassboltResourceTypeTuple(NamedTuple):
@@ -124,20 +139,6 @@ class PassboltFolderTuple(NamedTuple):
     folder_parent_id: PassboltFolderIdType
     personal: bool
     permissions: List[PassboltPermissionTuple] = []
-
-
-class PassboltTagTuple(NamedTuple):
-    """Represents a tag in Passbolt."""
-    id: PassboltTagIdType
-    slug: str
-    is_shared: bool
-    created: PassboltDateTimeType
-    modified: PassboltDateTimeType
-    created_by: PassboltUserIdType
-    modified_by: PassboltUserIdType
-    tag: str
-    virtual: Optional[dict] = None
-    children: List[dict] = []
 
 
 class PassboltGroupTuple(NamedTuple):

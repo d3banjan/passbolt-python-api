@@ -142,7 +142,7 @@ class APIClient:
                 or e.response.json()["header"]["message"]
                 != "MFA authentication is required."
             ):
-                logging.error(r.text)
+                logging.error("HTTP %s error for %s", r.status_code, r.url)
                 raise e
             if not self.config["PASSBOLT"]["OTP"]:
                 raise ValueError("Missing value for OTP in config.ini")
@@ -182,7 +182,7 @@ class APIClient:
             r.raise_for_status()
             return r.json()
         except requests.exceptions.HTTPError as e:
-            logging.error(r.text)
+            logging.error("HTTP %s error for %s", r.status_code, r.url)
             raise e
 
     def get(self, url, return_response_object=False, **kwargs):
@@ -193,7 +193,7 @@ class APIClient:
                 return r
             return r.json()
         except requests.exceptions.HTTPError as e:
-            logging.error(r.text)
+            logging.error("HTTP %s error for %s", r.status_code, r.url)
             raise e
 
     def put(self, url, data, return_response_object=False, **kwargs):
@@ -204,7 +204,7 @@ class APIClient:
                 return r
             return r.json()
         except requests.exceptions.HTTPError as e:
-            logging.error(r.text)
+            logging.error("HTTP %s error for %s", r.status_code, r.url)
             raise e
 
     def post(self, url, data, return_response_object=False, **kwargs):
@@ -215,7 +215,7 @@ class APIClient:
                 return r
             return r.json()
         except requests.exceptions.HTTPError as e:
-            logging.error(r.text)
+            logging.error("HTTP %s error for %s", r.status_code, r.url)
             raise e
 
     def close_session(self):

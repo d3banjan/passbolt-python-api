@@ -45,10 +45,10 @@ class PassboltSecretTuple(NamedTuple):
 
 class PassboltPermissionTuple(NamedTuple):
     id: PassboltPermissionIdType
-    aco: Literal["User", "Group"]
-    aco_foreign_key: Union[PassboltUserIdType, PassboltGroupIdType]
-    aro: Literal["Resource", "Folder"]
-    aro_foreign_key: Union[PassboltResourceIdType, PassboltFolderIdType]
+    aco: Literal["Resource", "Folder"]  # Access Control Object - what is being accessed
+    aco_foreign_key: Union[PassboltResourceIdType, PassboltFolderIdType]
+    aro: Literal["User", "Group"]  # Access Request Object - who is requesting access
+    aro_foreign_key: Union[PassboltUserIdType, PassboltGroupIdType]
     type: int
     created: PassboltDateTimeType
     modified: PassboltDateTimeType

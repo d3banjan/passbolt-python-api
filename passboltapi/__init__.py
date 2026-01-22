@@ -249,8 +249,9 @@ class PassboltAPI(APIClient):
 
     def _get_secret(self, resource_id: PassboltResourceIdType) -> PassboltSecretTuple:
         response = self.get(f"/secrets/resource/{resource_id}.json")
-        assert "body" in response.keys(), f"Key 'body' not found in response keys: {response.keys()}"
-        return PassboltSecretTuple(**response["body"])
+        if "body" not in response.keys():
+            raise PassboltError(f"Key 'body' not found in response keys: {response.keys()}")
+        return constructor(PassboltSecretTuple)(response["body"])
 
     def _update_secret(self, resource_id: PassboltResourceIdType, new_secret):
         return self.put(f"/resources/{resource_id}.json", {"secrets": new_secret}, return_response_object=True)
@@ -288,7 +289,8 @@ class PassboltAPI(APIClient):
         if url_params:
             url_params = "?" + url_params
         response = self.get("/resources.json" + url_params)
-        assert "body" in response.keys(), f"Key 'body' not found in response keys: {response.keys()}"
+        if "body" not in response.keys():
+            raise PassboltError(f"Key 'body' not found in response keys: {response.keys()}")
         resources = response["body"]
         yield from resources
 
@@ -301,11 +303,13 @@ class PassboltAPI(APIClient):
         if url_params:
             url_params = "?" + url_params
         response = self.get("/folders.json" + url_params)
-        assert "body" in response.keys(), f"Key 'body' not found in response keys: {response.keys()}"
+        if "body" not in response.keys():
+            raise PassboltError(f"Key 'body' not found in response keys: {response.keys()}")
+        if not response["body"]:
+            raise PassboltError("Empty 'body' array in response")
         response = response["body"][0]
-        assert "children_resources" in response.keys(), (
-            f"Key 'body[].children_resources' not found in response " f"keys: {response.keys()} "
-        )
+        if "children_resources" not in response.keys():
+            raise PassboltError(f"Key 'body[].children_resources' not found in response keys: {response.keys()}")
         return constructor(PassboltResourceTuple)(response["children_resources"])
 
     def list_users_with_folder_access(self, folder_id: PassboltFolderIdType) -> List[PassboltUserTuple]:
@@ -331,7 +335,8 @@ class PassboltAPI(APIClient):
             params = {"filter[has-access]": resource_or_folder_id, "contain[user]": 1}
         params["contain[permission]"] = True
         response = self.get(f"/users.json", params=params)
-        assert "body" in response.keys(), f"Key 'body' not found in response keys: {response.keys()}"
+        if "body" not in response.keys():
+            raise PassboltError(f"Key 'body' not found in response keys: {response.keys()}")
         response = response["body"]
         users = constructor(
             PassboltUserTuple,
@@ -379,10 +384,10 @@ class PassboltAPI(APIClient):
                 "contain[permissions.group]": 1,
             },
         )
-        assert "body" in response.keys(), f"Key 'body' not found in response keys: {response.keys()}"
-        assert (
-            "permissions" in response["body"].keys()
-        ), f"Key 'body.permissions' not found in response: {response['body'].keys()}"
+        if "body" not in response.keys():
+            raise PassboltError(f"Key 'body' not found in response keys: {response.keys()}")
+        if "permissions" not in response["body"].keys():
+            raise PassboltError(f"Key 'body.permissions' not found in response: {response['body'].keys()}")
         return constructor(
             PassboltFolderTuple,
             subconstructors={
@@ -490,7 +495,8 @@ class PassboltAPI(APIClient):
         recipients = self.list_users(resource_or_folder_id=resource_id)
         if secret_type == PassboltResourceType.PASSWORD:
             if password is not None:
-                assert isinstance(password, str), f"password has to be a string object -- {password}"
+                if not isinstance(password, str):
+                    raise TypeError(f"password must be a string, got {type(password).__name__}")
                 payload["secrets"] = self._encrypt_secrets(secret_text=password, recipients=recipients)
         elif secret_type == PassboltResourceType.PASSWORD_WITH_DESCRIPTION:
             pwd, desc = self._json_load_secret(secret=secret)

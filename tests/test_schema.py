@@ -142,6 +142,34 @@ class TestConstructorFiltering(unittest.TestCase):
         self.assertEqual(result, [])
 
 
+class TestConstructorValidation(unittest.TestCase):
+    """Test that constructor() properly validates input data."""
+
+    def test_constructor_raises_type_error_for_non_dict_list_items(self):
+        """Constructor should raise TypeError if list contains non-dict items."""
+        invalid_data = [
+            {"id": "abc123", "user_id": "user456"},
+            "not a dict",  # Invalid item
+        ]
+
+        with self.assertRaises(TypeError) as context:
+            constructor(PassboltSecretTuple)(invalid_data)
+
+        self.assertIn("must be dicts", str(context.exception))
+
+    def test_constructor_raises_value_error_for_invalid_renamed_fields(self):
+        """Constructor should raise ValueError for invalid renamed field mappings."""
+        valid_data = {"id": "abc123", "user_id": "user456"}
+
+        with self.assertRaises(ValueError) as context:
+            constructor(
+                PassboltSecretTuple,
+                renamed_fields={"old_name": "nonexistent_field"}
+            )(valid_data)
+
+        self.assertIn("Invalid field names", str(context.exception))
+
+
 class TestNullableFields(unittest.TestCase):
     """Test that nullable fields from API are handled correctly."""
 

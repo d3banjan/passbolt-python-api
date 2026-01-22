@@ -171,8 +171,9 @@ def constructor(
             data = [data]
             is_singleton = True
         elif isinstance(data, list):
-            # if list, assert that all elements are dicts
-            assert all(map(lambda datum: type(datum) == dict, data)), "All records must be dicts"
+            # if list, validate that all elements are dicts
+            if not all(isinstance(datum, dict) for datum in data):
+                raise TypeError("All records must be dicts")
         else:
             raise ValueError(f"Data ingested by {_namedtuple} cannot be {type(data)}")
 
@@ -181,7 +182,9 @@ def constructor(
         # 2. rename fields
         if renamed_fields:
             # make sure that all final fieldnames are present in the namedtuple
-            assert not set(renamed_fields.values()).difference(_namedtuple._fields)
+            invalid_fields = set(renamed_fields.values()).difference(_namedtuple._fields)
+            if invalid_fields:
+                raise ValueError(f"Invalid field names in renamed_fields: {invalid_fields}")
             data = [
                 {(renamed_fields[k] if k in renamed_fields.keys() else k): v for k, v in datum.items()}
                 for datum in data

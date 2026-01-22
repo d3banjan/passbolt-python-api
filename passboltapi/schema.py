@@ -66,8 +66,8 @@ class PassboltOpenPgpKeyTuple(NamedTuple):
     modified: PassboltDateTimeType
     key_id: str
     fingerprint: str
-    type: Literal["RSA", "ELG", "DSA", "ECDH", "ECDSA", "EDDSA"]
-    expires: PassboltDateTimeType
+    type: Literal["RSA", "ELG", "DSA", "ECDH", "ECDSA", "EDDSA", "ECC"]
+    expires: Optional[PassboltDateTimeType] = None  # Nullable for keys that don't expire
 
 
 class PassboltUserTuple(NamedTuple):
@@ -79,7 +79,7 @@ class PassboltUserTuple(NamedTuple):
     username: str
     role_id: PassboltRoleIdType
     profile: dict
-    last_logged_in: PassboltDateTimeType
+    last_logged_in: Optional[PassboltDateTimeType] = None  # Nullable for users who never logged in
     role: Optional[dict] = None
     gpgkey: Optional[PassboltOpenPgpKeyTuple] = None
 
@@ -95,12 +95,12 @@ class PassboltResourceTuple(NamedTuple):
     name: str
     uri: str
     username: str
-    resource_type_id: PassboltResourceIdType
+    resource_type_id: PassboltResourceTypeIdType  # Fixed: was incorrectly PassboltResourceIdType
     folder_parent_id: PassboltFolderIdType
-    creator: Union[None, PassboltUserTuple] = None
-    favorite: Union[None, PassboltFavoriteDetailsType] = None
-    modifier: Union[None, PassboltUserTuple] = None
-    permission: Union[PassboltPermissionTuple] = None
+    creator: Optional[PassboltUserTuple] = None
+    favorite: Optional[PassboltFavoriteDetailsType] = None
+    modifier: Optional[PassboltUserTuple] = None
+    permission: Optional[PassboltPermissionTuple] = None  # Fixed: Union[T] = None is invalid
 
 
 class PassboltResourceTypeTuple(NamedTuple):

@@ -142,5 +142,88 @@ class TestConstructorFiltering(unittest.TestCase):
         self.assertEqual(result, [])
 
 
+class TestNullableFields(unittest.TestCase):
+    """Test that nullable fields from API are handled correctly."""
+
+    def test_user_with_null_last_logged_in(self):
+        """Users who never logged in have null last_logged_in."""
+        user_data = {
+            "id": "user-123",
+            "created": "2024-01-01T00:00:00+00:00",
+            "active": True,
+            "deleted": False,
+            "modified": "2024-01-02T00:00:00+00:00",
+            "username": "test@example.com",
+            "role_id": "role-456",
+            "profile": {"first_name": "Test", "last_name": "User"},
+            "last_logged_in": None,  # User never logged in
+        }
+
+        user = constructor(PassboltUserTuple)(user_data)
+
+        self.assertEqual(user.id, "user-123")
+        self.assertIsNone(user.last_logged_in)
+
+    def test_user_without_last_logged_in_field(self):
+        """Users response may omit last_logged_in entirely."""
+        user_data = {
+            "id": "user-123",
+            "created": "2024-01-01T00:00:00+00:00",
+            "active": True,
+            "deleted": False,
+            "modified": "2024-01-02T00:00:00+00:00",
+            "username": "test@example.com",
+            "role_id": "role-456",
+            "profile": {"first_name": "Test", "last_name": "User"},
+            # last_logged_in omitted
+        }
+
+        user = constructor(PassboltUserTuple)(user_data)
+
+        self.assertEqual(user.id, "user-123")
+        self.assertIsNone(user.last_logged_in)
+
+    def test_gpg_key_with_null_expires(self):
+        """GPG keys that don't expire have null expires field."""
+        key_data = {
+            "id": "key-123",
+            "armored_key": "-----BEGIN PGP PUBLIC KEY BLOCK-----...",
+            "created": "2024-01-01T00:00:00+00:00",
+            "key_created": "2024-01-01T00:00:00+00:00",
+            "bits": 4096,
+            "deleted": False,
+            "modified": "2024-01-02T00:00:00+00:00",
+            "key_id": "ABCD1234",
+            "fingerprint": "ABCD1234ABCD1234ABCD1234ABCD1234ABCD1234",
+            "type": "RSA",
+            "expires": None,  # Key doesn't expire
+        }
+
+        key = constructor(PassboltOpenPgpKeyTuple)(key_data)
+
+        self.assertEqual(key.id, "key-123")
+        self.assertIsNone(key.expires)
+
+    def test_gpg_key_with_ecc_type(self):
+        """Modern GPG keys may use ECC type."""
+        key_data = {
+            "id": "key-123",
+            "armored_key": "-----BEGIN PGP PUBLIC KEY BLOCK-----...",
+            "created": "2024-01-01T00:00:00+00:00",
+            "key_created": "2024-01-01T00:00:00+00:00",
+            "bits": 256,
+            "deleted": False,
+            "modified": "2024-01-02T00:00:00+00:00",
+            "key_id": "ABCD1234",
+            "fingerprint": "ABCD1234ABCD1234ABCD1234ABCD1234ABCD1234",
+            "type": "ECC",  # Elliptic Curve Cryptography
+            "expires": "2025-01-01T00:00:00+00:00",
+        }
+
+        key = constructor(PassboltOpenPgpKeyTuple)(key_data)
+
+        self.assertEqual(key.type, "ECC")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -65,7 +65,8 @@ class APIClient:
         self.cert = None
         if config_path:
             self.config = configparser.ConfigParser()
-            self.config.read_file(open(config_path))
+            with open(config_path) as config_file:
+                self.config.read_file(config_file)
         self.requests_session = requests.Session()
 
         if not self.config:
@@ -116,8 +117,10 @@ class APIClient:
             raise ValueError("Missing value for USER_PUBLIC_KEY_FILE in config.ini")
         if not self.config["PASSBOLT"]["USER_PRIVATE_KEY_FILE"]:
             raise ValueError("Missing value for USER_PRIVATE_KEY_FILE in config.ini")
-        self.gpg.import_keys(open(self.config["PASSBOLT"]["USER_PUBLIC_KEY_FILE"]).read())
-        self.gpg.import_keys(open(self.config["PASSBOLT"]["USER_PRIVATE_KEY_FILE"]).read())
+        with open(self.config["PASSBOLT"]["USER_PUBLIC_KEY_FILE"]) as pub_key_file:
+            self.gpg.import_keys(pub_key_file.read())
+        with open(self.config["PASSBOLT"]["USER_PRIVATE_KEY_FILE"]) as priv_key_file:
+            self.gpg.import_keys(priv_key_file.read())
 
     def _login(self):
         r = self.requests_session.post(self.server_url + LOGIN_URL, json={"gpg_auth": {"keyid": self.gpg_fingerprint}}, verify=self.ssl_verify, cert=self.cert) # None is the default value in requests
